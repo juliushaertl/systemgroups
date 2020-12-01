@@ -1,0 +1,116 @@
+From a20e8320adc52b80690e2ffbc75d41c7ac64968e Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Julius=20H=C3=A4rtl?= <jus@bitgrid.net>
+Date: Tue, 1 Dec 2020 12:52:39 +0100
+Subject: [PATCH] Add group backend interface to hide members from
+ collaboration search
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Signed-off-by: Julius Härtl <jus@bitgrid.net>
+---
+ .../Collaboration/Collaborators/GroupPlugin.php       |  2 +-
+ .../Collaboration/Collaborators/MailPlugin.php        |  3 ++-
+ .../Collaboration/Collaborators/UserPlugin.php        |  8 ++++++++
+ lib/private/Group/Group.php                           | 11 +++++++++++
+ lib/public/IGroup.php                                 |  6 ++++++
+ 5 files changed, 28 insertions(+), 2 deletions(-)
+
+diff --git a/lib/private/Collaboration/Collaborators/GroupPlugin.php b/lib/private/Collaboration/Collaborators/GroupPlugin.php
+index 18a6631ed8..3f55c47ec0 100644
+--- a/lib/private/Collaboration/Collaborators/GroupPlugin.php
++++ b/lib/private/Collaboration/Collaborators/GroupPlugin.php
+@@ -118,7 +118,7 @@ class GroupPlugin implements ISearchPlugin {
+ 			// On page one we try if the search result has a direct hit on the
+ 			// user id and if so, we add that to the exact match list
+ 			$group = $this->groupManager->get($search);
+-			if ($group instanceof IGroup && (!$this->shareWithGroupOnly || in_array($group->getGID(), $userGroups))) {
++			if ($group instanceof IGroup && (!$this->shareWithGroupOnly || in_array($group->getGID(), $userGroups)) && !$group->hideFromCollaboration()) {
+ 				$result['exact'][] = [
+ 					'label' => $group->getDisplayName(),
+ 					'value' => [
+diff --git a/lib/private/Collaboration/Collaborators/MailPlugin.php b/lib/private/Collaboration/Collaborators/MailPlugin.php
+index 90dc591917..99dc7e90b0 100644
+--- a/lib/private/Collaboration/Collaborators/MailPlugin.php
++++ b/lib/private/Collaboration/Collaborators/MailPlugin.php
+@@ -111,7 +111,8 @@ class MailPlugin implements ISearchPlugin {
+ 							$userGroups = $this->groupManager->getUserGroupIds($this->userSession->getUser());
+ 							$found = false;
+ 							foreach ($userGroups as $userGroup) {
+-								if ($this->groupManager->isInGroup($contact['UID'], $userGroup)) {
++								$groupObject = $this->groupManager->get($userGroup);
++								if ($this->groupManager->isInGroup($contact['UID'], $userGroup) && $groupObject && !$groupObject->hideMembersFromCollaboration()) {
+ 									$found = true;
+ 									break;
+ 								}
+diff --git a/lib/private/Collaboration/Collaborators/UserPlugin.php b/lib/private/Collaboration/Collaborators/UserPlugin.php
+index cd4963197a..6ee29a7edf 100644
+--- a/lib/private/Collaboration/Collaborators/UserPlugin.php
++++ b/lib/private/Collaboration/Collaborators/UserPlugin.php
+@@ -94,6 +94,10 @@ class UserPlugin implements ISearchPlugin {
+ 		if ($this->shareWithGroupOnly) {
+ 			// Search in all the groups this user is part of
+ 			foreach ($currentUserGroups as $userGroupId) {
++				$group = $this->groupManager->get($userGroupId);
++				if (!$group || $group->hideFromCollaboration()) {
++					continue;
++				}
+ 				$usersInGroup = $this->groupManager->displayNamesInGroup($userGroupId, $search, $limit, $offset);
+ 				foreach ($usersInGroup as $userId => $displayName) {
+ 					$userId = (string) $userId;
+@@ -202,6 +206,10 @@ class UserPlugin implements ISearchPlugin {
+ 				if ($this->shareWithGroupOnly) {
+ 					// Only add, if we have a common group
+ 					$commonGroups = array_intersect($currentUserGroups, $this->groupManager->getUserGroupIds($user));
++					$commonGroups = array_filter($commonGroups, function ($gid) {
++						$group = $this->groupManager->get($gid);
++						return $group && !$group->hideMembersFromCollaboration();
++					});
+ 					$addUser = !empty($commonGroups);
+ 				}
+ 
+diff --git a/lib/private/Group/Group.php b/lib/private/Group/Group.php
+index 2e16d5f124..88240bdda6 100644
+--- a/lib/private/Group/Group.php
++++ b/lib/private/Group/Group.php
+@@ -36,6 +36,7 @@ use OC\Hooks\PublicEmitter;
+ use OCP\Group\Backend\ICountDisabledInGroup;
+ use OCP\Group\Backend\IGetDisplayNameBackend;
+ use OCP\Group\Backend\IHideFromCollaborationBackend;
++use OCP\Group\Backend\IHideMembersFromCollaborationBackend;
+ use OCP\Group\Backend\ISetDisplayNameBackend;
+ use OCP\GroupInterface;
+ use OCP\IGroup;
+@@ -402,4 +403,14 @@ class Group implements IGroup {
+ 			return $hide | ($backend instanceof IHideFromCollaborationBackend && $backend->hideGroup($this->gid));
+ 		}, false);
+ 	}
++
++	/**
++	 * @return bool
++	 * @since 21.0.0
++	 */
++	public function hideMembersFromCollaboration(): bool {
++		return array_reduce($this->backends, function (bool $hide, GroupInterface $backend) {
++			return $hide | ($backend instanceof IHideMembersFromCollaborationBackend && $backend->hideGroupMembers($this->gid));
++		}, false);
++	}
+ }
+diff --git a/lib/public/IGroup.php b/lib/public/IGroup.php
+index 51dcfb6158..6653b80463 100644
+--- a/lib/public/IGroup.php
++++ b/lib/public/IGroup.php
+@@ -154,4 +154,10 @@ interface IGroup {
+ 	 * @since 16.0.0
+ 	 */
+ 	public function hideFromCollaboration(): bool;
++
++	/**
++	 * @return bool
++	 * @since 21.0.0
++	 */
++	public function hideMembersFromCollaboration(): bool;
+ }
+-- 
+2.29.2
+
